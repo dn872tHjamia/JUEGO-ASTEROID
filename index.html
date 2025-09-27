@@ -2,7 +2,8 @@
 <html lang="es">
 <head>
     <meta charset="utf-8" />
-    <title>Asteroids Online Final</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Asteroids Online (Corregido)</title>
     <style>
         body { font-family: 'Courier New', Courier, monospace; margin: 0; display: flex; height: 100vh; background: #000; color: #fff; cursor: crosshair; }
         #ui { width: 320px; padding: 12px; background: #111; border-right: 2px solid #333; box-sizing: border-box; display: flex; flex-direction: column; }
@@ -20,7 +21,7 @@
 <body>
     <div id="ui">
         <h2>ASTEROIDS</h2>
-        <div id="game-info">
+        <div id="game-info" class="hidden">
             <div id="score-display">PUNTOS: 0</div>
             <div id="lives-display">VIDAS: 3</div>
         </div>
@@ -51,7 +52,7 @@
 
 <script>
     // --- IMPORTANTE ---
-    // Pega aquí la URL de tu servidor de Render, cambiando "https" por "wss"
+    // Asegúrate de que esta sea la URL de tu servidor en Render.
     const SERVER_URL = "wss://servidor-asteroids-pvp.onrender.com";
 
     const ui = {
@@ -63,11 +64,12 @@
         roomCode: document.getElementById('room-code'), playerList: document.getElementById('player-list'),
         btnStartGame: document.getElementById('btn-start-game'), leaderboard: document.getElementById('leaderboard'),
         multiplayerModeTitle: document.getElementById('multiplayer-mode-title'),
-        scoreDisplay: document.getElementById('score-display'), livesDisplay: document.getElementById('lives-display'),
+        gameInfo: document.getElementById('game-info'), scoreDisplay: document.getElementById('score-display'), 
+        livesDisplay: document.getElementById('lives-display'),
     };
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
-    let w = canvas.width = 1200, h = canvas.height = 800;
+    let w = canvas.width = 1200, h = canvas.height = 800; // Fixed size for consistency
 
     let ws, myPlayerId, isHost = false, animationFrameId, gameMode = 'solo';
     let gameState = {};
@@ -76,14 +78,24 @@
     const PLAYER_COLORS = ['#0f0', '#0af', '#f80', '#f0f'];
     const ORB_DATA = {rainbow:0, green:'#0f0', red:'#f00', blue:'#08f', yellow:'#ff0', purple:'#f0f', orange:'#f80'};
 
+    function createInitialGameState(mode) {
+        return {
+            players: {}, bullets: [], orbs: [], asteroids: [], enemies: [],
+            gameMode: mode, inProgress: false, gameOver: false,
+        };
+    }
+    gameState = createInitialGameState('solo'); // Start with a safe default
+
     function draw() {
         ctx.clearRect(0, 0, w, h);
-        if (!gameState.players) return;
+        if (!gameState || !gameState.players) return;
+        
         (gameState.orbs || []).forEach(orb => {
             if (orb.type === 'rainbow') { const grad = ctx.createRadialGradient(orb.x, orb.y, 1, orb.x, orb.y, orb.r); grad.addColorStop(0,'red'); grad.addColorStop(0.2,'yellow'); grad.addColorStop(0.4,'green'); grad.addColorStop(0.6,'blue'); grad.addColorStop(0.8,'purple'); grad.addColorStop(1,'red'); ctx.fillStyle = grad;
             } else ctx.fillStyle = ORB_DATA[orb.type];
             ctx.beginPath(); ctx.arc(orb.x, orb.y, orb.r, 0, Math.PI * 2); ctx.fill();
         });
+
         for (const id in gameState.players) {
             const p = gameState.players[id];
             if (p.invincible > 0 && Math.floor(p.invincible / 10) % 2 === 0) continue;
@@ -91,88 +103,87 @@
             ctx.strokeStyle = p.color; ctx.lineWidth = 2;
             ctx.beginPath(); ctx.moveTo(p.size, 0); ctx.lineTo(-p.size / 2, -p.size / 2); ctx.lineTo(-p.size / 2, p.size / 2); ctx.closePath(); ctx.stroke();
             ctx.restore();
-            if(p.powerUp.duration > 0) {
+            if(p.powerUp && p.powerUp.duration > 0) {
                 ctx.beginPath(); const pu = p.powerUp;
                 if(pu.type === 'blue' || pu.type === 'purple') { ctx.strokeStyle = pu.type === 'blue' ? 'rgba(0,180,255,0.5)' : 'rgba(255,0,255,0.5)'; ctx.lineWidth = 4; ctx.arc(p.x, p.y, p.size + 10, 0, Math.PI * 2); ctx.stroke(); }
                 else if (pu.type === 'red') { ctx.fillStyle = 'rgba(255,0,0,0.2)'; ctx.arc(p.x, p.y, 100, 0, Math.PI * 2); ctx.fill(); }
                 else if (pu.type === 'orange') { ctx.strokeStyle = '#08f'; ctx.lineWidth = 4; ctx.arc(p.x, p.y, p.size + 8, p.angle - Math.PI/2.2, p.angle + Math.PI/2.2); ctx.stroke(); }
             }
         }
+
         (gameState.bullets || []).forEach(b => { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, b.size/2, 0, Math.PI*2); ctx.fill(); });
         (gameState.asteroids || []).forEach(a => { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.rotation); ctx.beginPath(); ctx.moveTo(a.shape[0].x, a.shape[0].y); for (let i = 1; i < a.shape.length; i++) ctx.lineTo(a.shape[i].x, a.shape[i].y); ctx.closePath(); ctx.stroke(); ctx.restore(); });
         (gameState.enemies || []).forEach(e => { ctx.fillStyle = '#0f0'; ctx.font = '24px "Courier New"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('💀', e.x, e.y); });
 
-        if (gameState.gameMode === 'pvp' && gameState.inProgress) {
-            ui.leaderboard.classList.remove('hidden');
-            const sortedPlayers = Object.values(gameState.players).sort((a,b) => b.kills - a.kills);
-            const time = new Date(gameState.matchTime / 30 * 1000).toISOString().substr(14, 5);
-            let leaderboardHTML = `<strong>${time}</strong><hr>`;
-            sortedPlayers.forEach(p => { leaderboardHTML += `<div style="color:${p.color};">${p.id.split('_')[0]}: ${p.kills} kills</div>`; });
-            ui.leaderboard.innerHTML = leaderboardHTML;
-        } else { ui.leaderboard.classList.add('hidden'); }
-        
-        if (gameState.gameMode === 'coop' || gameState.gameMode === 'solo') {
-            ui.scoreDisplay.textContent = `PUNTOS: ${gameState.score}`;
-            ui.livesDisplay.textContent = `VIDAS: ${gameState.lives}`;
+        // Draw UI
+        if (gameState.inProgress) {
+            if (gameState.gameMode === 'pvp') {
+                ui.leaderboard.classList.remove('hidden'); ui.gameInfo.classList.add('hidden');
+                const sortedPlayers = Object.values(gameState.players).sort((a,b) => b.kills - a.kills);
+                const time = new Date(gameState.matchTime / 30 * 1000).toISOString().substr(14, 5);
+                let leaderboardHTML = `<strong>${time}</strong><hr>`;
+                sortedPlayers.forEach(p => { leaderboardHTML += `<div style="color:${p.color};">${p.id.split('_')[0]}: ${p.kills} kills</div>`; });
+                ui.leaderboard.innerHTML = leaderboardHTML;
+            } else {
+                ui.leaderboard.classList.add('hidden'); ui.gameInfo.classList.remove('hidden');
+                ui.scoreDisplay.textContent = `PUNTOS: ${gameState.score}`;
+                ui.livesDisplay.textContent = `VIDAS: ${gameState.lives}`;
+            }
+        } else {
+             ui.leaderboard.classList.add('hidden'); ui.gameInfo.classList.add('hidden');
         }
 
-        if (gameState.gameOver) { ctx.font = '40px "Courier New"'; ctx.fillStyle = '#f55'; ctx.textAlign = 'center'; ctx.fillText("FIN DE LA PARTIDA", w / 2, h / 2); }
+        if (gameState.gameOver) {
+            ctx.font = '40px "Courier New"'; ctx.fillStyle = '#f55'; ctx.textAlign = 'center';
+            ctx.fillText("FIN DE LA PARTIDA", w / 2, h / 2);
+        }
     }
 
-    // --- MODO OFFLINE / SOLITARIO ---
-    function startSoloGame() {
-        gameMode = 'solo';
-        myPlayerId = 'solo_player';
-        // Crear una copia completa de la lógica del servidor para el modo offline
-        const localGameState = {
-            players: {}, bullets: [], asteroids: [], enemies: [],
-            score: 0, lives: 3, inProgress: true, gameOver: false,
-        };
-        localGameState.players[myPlayerId] = { id: myPlayerId, x: w/2, y: h/2, vx:0,vy:0, angle:0, keys: keyState, shootCooldown:0, invincible:180, color: '#0f0', size: 15, powerUp:{} };
-        for(let i=0; i<5; i++) spawnLocalAsteroid(localGameState);
-        
-        ui.mainMenu.classList.add('hidden');
-        ui.scoreDisplay.classList.remove('hidden');
-        ui.livesDisplay.classList.remove('hidden');
-        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    function soloGameLoop() {
+        // En modo solitario, el cliente ejecuta la lógica de `update` y `draw`.
+        // Esta es una versión simplificada de la lógica del servidor.
+        const SHIP_SIZE = 15, FRICTION = 0.99;
+        if(gameState.gameOver) { draw(); return; }
 
-        function localGameLoop() {
-            // Aquí se ejecutaría la lógica de 'updateRoom' del servidor, pero localmente
-            // Es una versión simplificada del modo cooperativo
-            if(localGameState.gameOver) {
-                draw(); // Dibuja el estado final de "Game Over"
-                return;
-            }
-            // Mover/Disparar
-            const p = localGameState.players[myPlayerId];
-            p.angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
-            if (p.keys.thrust) { p.vx += Math.cos(p.angle) * 0.15; p.vy += Math.sin(p.angle) * 0.15; }
-            if (p.keys.reverse) { p.vx -= Math.cos(p.angle) * 0.08; p.vy -= Math.sin(p.angle) * 0.08; }
-            if (p.keys.shoot && p.shootCooldown <= 0) { p.shootCooldown = 15; localGameState.bullets.push({ x: p.x + Math.cos(p.angle) * p.size, y: p.y + Math.sin(p.angle) * p.size, vx: p.vx + Math.cos(p.angle) * 8, vy: p.vy + Math.sin(p.angle) * 8, life: 60, owner: myPlayerId, size: 4}); }
-            if (p.shootCooldown > 0) p.shootCooldown--;
-            p.vx *= 0.99; p.vy *= 0.99;
-            p.x = (p.x + p.vx < 0) ? p.x + p.vx + w : (p.x + p.vx > w) ? p.x + p.vx - w : p.x + p.vx;
-            p.y = (p.y + p.vy < 0) ? p.y + p.vy + h : (p.y + p.vy > h) ? p.y + p.vy - h : p.y + p.vy;
-            
-            // Colisiones y lógica de asteroides (simplificado)
-            localGameState.asteroids.forEach(a => { a.x += a.vx; a.y += a.vy; a.x = (a.x < 0) ? a.x + w : (a.x > w) ? a.x - w : a.x; a.y = (a.y < 0) ? a.y + h : (a.y > h) ? a.y - h : a.y; });
-            // ... Aquí iría toda la lógica de colisiones de balas vs asteroides, y jugador vs asteroides ...
+        const p = gameState.players[myPlayerId];
+        p.angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+        if (p.keys.thrust) { p.vx += Math.cos(p.angle) * 0.15; p.vy += Math.sin(p.angle) * 0.15; }
+        if (p.keys.reverse) { p.vx -= Math.cos(p.angle) * 0.08; p.vy -= Math.sin(p.angle) * 0.08; }
+        if (p.keys.shoot && p.shootCooldown <= 0) { p.shootCooldown = 15; gameState.bullets.push({ x: p.x + Math.cos(p.angle) * p.size, y: p.y + Math.sin(p.angle) * p.size, vx: p.vx + Math.cos(p.angle) * 8, vy: p.vy + Math.sin(p.angle) * 8, life: 60, owner: myPlayerId, size: 4}); }
+        if (p.shootCooldown > 0) p.shootCooldown--;
+        p.vx *= FRICTION; p.vy *= FRICTION;
+        p.x = wrap(p.x + p.vx, w); p.y = wrap(p.y + p.vy, h);
 
-            gameState = localGameState; // Asignar al estado global para que 'draw' lo use
-            draw();
-            requestAnimationFrame(localGameLoop);
-        }
-        function spawnLocalAsteroid(state) {
-            const r = 30 + Math.random() * 20;
-            const shape = []; const segments = 12;
-            for (let i = 0; i < segments; i++) { const angle = (i / segments) * Math.PI * 2; const radiusOffset = 0.8 + Math.random() * 0.4; shape.push({ x: Math.cos(angle) * r * radiusOffset, y: Math.sin(angle) * r * radiusOffset }); }
-            state.asteroids.push({ x: Math.random()*w, y: Math.random()*h, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, r: r, shape: shape, rotation:0, rotationSpeed: (Math.random()-0.5)*0.02 });
-        }
-        localGameLoop();
+        // Lógica simple de asteroides (sin enemigos, sin orbes)
+        if(gameState.asteroids.length === 0) { gameState.gameOver = true; } // Ganaste
+        // ... (Aquí iría la lógica completa de colisiones del modo solitario) ...
+
+        draw();
+        animationFrameId = requestAnimationFrame(soloGameLoop);
+    }
+
+    function clientGameLoop() {
+        // En multijugador, el cliente solo dibuja el estado que recibe del servidor.
+        draw();
+        animationFrameId = requestAnimationFrame(clientGameLoop);
     }
     
-    // --- LÓGICA DE RED ---
-    function sendInput() { if (!ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId] || isHost) return; const p = gameState.players[myPlayerId]; const angle = Math.atan2(mouse.y - p.y, mouse.x - p.x); ws.send(JSON.stringify({ type: 'input', payload: { keys: keyState, angle: angle }})); }
+    function sendInput() {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId] || isHost) return;
+        const p = gameState.players[myPlayerId];
+        const angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+        ws.send(JSON.stringify({ type: 'input', payload: { keys: keyState, angle: angle }}));
+    }
+
+    // --- Input Listeners ---
+    canvas.addEventListener('mousemove', e => { const rect = canvas.getBoundingClientRect(); mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top; });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('mousedown', e => { if (e.button === 0 || e.button === 2) keyState.shoot = true; });
+    canvas.addEventListener('mouseup', e => { if (e.button === 0 || e.button === 2) keyState.shoot = false; });
+    window.addEventListener('keydown', e => { if (e.key === 'w') keyState.thrust = true; if (e.key === 's') keyState.reverse = true; });
+    window.addEventListener('keyup', e => { if (e.key === 'w') keyState.thrust = false; if (e.key === 's') keyState.reverse = false; });
+
+    // --- WebSocket Connection & Messaging ---
     function connect(mode) {
         ws = new WebSocket(SERVER_URL);
         ws.onmessage = onMessage;
@@ -194,7 +205,7 @@
                 updatePlayerListUI(payload.players);
                 break;
             case 'joinedRoom':
-                myPlayerId = payload.playerId;
+                myPlayerId = payload.playerId; isHost = false;
                 ui.multiplayerMenu.classList.add('hidden'); ui.lobby.classList.remove('hidden');
                 ui.roomCode.textContent = payload.roomCode;
                 break;
@@ -202,9 +213,9 @@
             case 'startGame':
                 gameState = payload.state;
                 ui.lobby.classList.add('hidden'); ui.mainMenu.classList.add('hidden');
-                setInterval(sendInput, 1000 / 30);
+                if (!isHost) setInterval(sendInput, 1000 / 30);
                 if(animationFrameId) cancelAnimationFrame(animationFrameId);
-                gameLoop();
+                clientGameLoop(); // <--- CLIENTE SOLO DIBUJA
                 break;
             case 'state': gameState = payload.state; break;
             case 'error': alert(payload); if (ws) ws.close(); break;
@@ -219,19 +230,21 @@
             ui.playerList.appendChild(li);
         });
     }
+
+    // --- Main Menu UI Logic ---
     function showMultiplayerMenu(mode) {
         gameMode = mode;
-        ui.mainMenu.classList.add('hidden'); ui.multiplayerMenu.classList.remove('hidden');
+        ui.mainMenu.classList.add('hidden');
+        ui.multiplayerMenu.classList.remove('hidden');
         ui.multiplayerModeTitle.textContent = "Modo: " + (mode === 'pvp' ? 'Arena PvP' : 'Cooperativo');
         ui.btnHost.onclick = () => { isHost = true; connect(mode); };
         ui.btnJoin.onclick = () => { isHost = false; const code = ui.joinCodeInput.value.toUpperCase(); if(code) connect(mode); };
     }
-
     ui.btnPvp.addEventListener('click', () => showMultiplayerMenu('pvp'));
     ui.btnCoop.addEventListener('click', () => showMultiplayerMenu('coop'));
     ui.btnSolo.addEventListener('click', startSoloGame);
     ui.btnBackToMain.addEventListener('click', () => location.reload());
-    ui.btnStartGame.addEventListener('click', () => { if(isHost) ws.send(JSON.stringify({type: 'start'})); });
+    ui.btnStartGame.addEventListener('click', () => { if(isHost) { ws.send(JSON.stringify({type: 'start'})); if(animationFrameId) cancelAnimationFrame(animationFrameId); clientGameLoop(); } });
 </script>
 </body>
 </html>
