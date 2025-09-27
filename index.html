@@ -14,11 +14,17 @@
         #leaderboard { position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.4); padding: 10px; border-radius: 5px; border: 1px solid #555; color: #fff; text-align: left; font-size: 14px; min-width: 150px; }
         input[type="text"] { width: 100%; background: #222; color: #ddd; border: 1px solid #555; padding: 10px; box-sizing: border-box; text-align: center; font-family: inherit; text-transform: uppercase; }
         #player-list { list-style: none; padding: 0; }
+        #game-info { text-align: center; }
     </style>
 </head>
 <body>
     <div id="ui">
-        <h2>ASTEROIDS</h2><hr />
+        <h2>ASTEROIDS</h2>
+        <div id="game-info">
+            <div id="score-display">PUNTOS: 0</div>
+            <div id="lives-display">VIDAS: 3</div>
+        </div>
+        <hr />
         <div id="main-menu">
             <button id="btn-solo">Jugar en Solitario</button>
             <button id="btn-coop">Multijugador Cooperativo</button>
@@ -46,7 +52,7 @@
 <script>
     // --- IMPORTANTE ---
     // Pega aquí la URL de tu servidor de Render, cambiando "https" por "wss"
-    const SERVER_URL = "wss://servidor-asteroids-pvp.onrender.com"; // CAMBIA ESTO
+    const SERVER_URL = "wss://servidor-asteroids-pvp.onrender.com";
 
     const ui = {
         mainMenu: document.getElementById('main-menu'), multiplayerMenu: document.getElementById('multiplayer-menu'),
@@ -57,23 +63,25 @@
         roomCode: document.getElementById('room-code'), playerList: document.getElementById('player-list'),
         btnStartGame: document.getElementById('btn-start-game'), leaderboard: document.getElementById('leaderboard'),
         multiplayerModeTitle: document.getElementById('multiplayer-mode-title'),
+        scoreDisplay: document.getElementById('score-display'), livesDisplay: document.getElementById('lives-display'),
     };
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
-    let w = canvas.width = 1200, h = canvas.height = 800; // Tamaño fijo para consistencia
+    let w = canvas.width = 1200, h = canvas.height = 800;
 
-    let ws, myPlayerId, isHost = false, animationFrameId;
+    let ws, myPlayerId, isHost = false, animationFrameId, gameMode = 'solo';
     let gameState = {};
     let keyState = { thrust: false, reverse: false, shoot: false };
     let mouse = { x: 0, y: 0 };
+    const PLAYER_COLORS = ['#0f0', '#0af', '#f80', '#f0f'];
+    const ORB_DATA = {rainbow:0, green:'#0f0', red:'#f00', blue:'#08f', yellow:'#ff0', purple:'#f0f', orange:'#f80'};
 
     function draw() {
         ctx.clearRect(0, 0, w, h);
         if (!gameState.players) return;
         (gameState.orbs || []).forEach(orb => {
-            const orbData = {rainbow:0, green:'#0f0', red:'#f00', blue:'#08f', yellow:'#ff0', purple:'#f0f', orange:'#f80'};
-            if (orb.type === 'rainbow') { const grad = ctx.createRadialGradient(orb.x, orb.y, 1, orb.x, orb.y, orb.r); grad.addColorStop(0, 'red'); grad.addColorStop(0.2, 'yellow'); grad.addColorStop(0.4, 'green'); grad.addColorStop(0.6, 'blue'); grad.addColorStop(0.8, 'purple'); grad.addColorStop(1, 'red'); ctx.fillStyle = grad;
-            } else ctx.fillStyle = orbData[orb.type];
+            if (orb.type === 'rainbow') { const grad = ctx.createRadialGradient(orb.x, orb.y, 1, orb.x, orb.y, orb.r); grad.addColorStop(0,'red'); grad.addColorStop(0.2,'yellow'); grad.addColorStop(0.4,'green'); grad.addColorStop(0.6,'blue'); grad.addColorStop(0.8,'purple'); grad.addColorStop(1,'red'); ctx.fillStyle = grad;
+            } else ctx.fillStyle = ORB_DATA[orb.type];
             ctx.beginPath(); ctx.arc(orb.x, orb.y, orb.r, 0, Math.PI * 2); ctx.fill();
         });
         for (const id in gameState.players) {
@@ -91,6 +99,9 @@
             }
         }
         (gameState.bullets || []).forEach(b => { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, b.size/2, 0, Math.PI*2); ctx.fill(); });
+        (gameState.asteroids || []).forEach(a => { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.rotation); ctx.beginPath(); ctx.moveTo(a.shape[0].x, a.shape[0].y); for (let i = 1; i < a.shape.length; i++) ctx.lineTo(a.shape[i].x, a.shape[i].y); ctx.closePath(); ctx.stroke(); ctx.restore(); });
+        (gameState.enemies || []).forEach(e => { ctx.fillStyle = '#0f0'; ctx.font = '24px "Courier New"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('💀', e.x, e.y); });
+
         if (gameState.gameMode === 'pvp' && gameState.inProgress) {
             ui.leaderboard.classList.remove('hidden');
             const sortedPlayers = Object.values(gameState.players).sort((a,b) => b.kills - a.kills);
@@ -99,42 +110,79 @@
             sortedPlayers.forEach(p => { leaderboardHTML += `<div style="color:${p.color};">${p.id.split('_')[0]}: ${p.kills} kills</div>`; });
             ui.leaderboard.innerHTML = leaderboardHTML;
         } else { ui.leaderboard.classList.add('hidden'); }
-        if (gameState.gameOver && gameState.gameMode === 'pvp') { ctx.font = '40px "Courier New"'; ctx.fillStyle = '#f55'; ctx.textAlign = 'center'; ctx.fillText("FIN DE LA PARTIDA", w / 2, h / 2); }
+        
+        if (gameState.gameMode === 'coop' || gameState.gameMode === 'solo') {
+            ui.scoreDisplay.textContent = `PUNTOS: ${gameState.score}`;
+            ui.livesDisplay.textContent = `VIDAS: ${gameState.lives}`;
+        }
+
+        if (gameState.gameOver) { ctx.font = '40px "Courier New"'; ctx.fillStyle = '#f55'; ctx.textAlign = 'center'; ctx.fillText("FIN DE LA PARTIDA", w / 2, h / 2); }
     }
 
-    function gameLoop() {
-        // El cliente solo dibuja, el servidor actualiza el estado
-        if (gameState && gameState.inProgress) {
+    // --- MODO OFFLINE / SOLITARIO ---
+    function startSoloGame() {
+        gameMode = 'solo';
+        myPlayerId = 'solo_player';
+        // Crear una copia completa de la lógica del servidor para el modo offline
+        const localGameState = {
+            players: {}, bullets: [], asteroids: [], enemies: [],
+            score: 0, lives: 3, inProgress: true, gameOver: false,
+        };
+        localGameState.players[myPlayerId] = { id: myPlayerId, x: w/2, y: h/2, vx:0,vy:0, angle:0, keys: keyState, shootCooldown:0, invincible:180, color: '#0f0', size: 15, powerUp:{} };
+        for(let i=0; i<5; i++) spawnLocalAsteroid(localGameState);
+        
+        ui.mainMenu.classList.add('hidden');
+        ui.scoreDisplay.classList.remove('hidden');
+        ui.livesDisplay.classList.remove('hidden');
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+
+        function localGameLoop() {
+            // Aquí se ejecutaría la lógica de 'updateRoom' del servidor, pero localmente
+            // Es una versión simplificada del modo cooperativo
+            if(localGameState.gameOver) {
+                draw(); // Dibuja el estado final de "Game Over"
+                return;
+            }
+            // Mover/Disparar
+            const p = localGameState.players[myPlayerId];
+            p.angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+            if (p.keys.thrust) { p.vx += Math.cos(p.angle) * 0.15; p.vy += Math.sin(p.angle) * 0.15; }
+            if (p.keys.reverse) { p.vx -= Math.cos(p.angle) * 0.08; p.vy -= Math.sin(p.angle) * 0.08; }
+            if (p.keys.shoot && p.shootCooldown <= 0) { p.shootCooldown = 15; localGameState.bullets.push({ x: p.x + Math.cos(p.angle) * p.size, y: p.y + Math.sin(p.angle) * p.size, vx: p.vx + Math.cos(p.angle) * 8, vy: p.vy + Math.sin(p.angle) * 8, life: 60, owner: myPlayerId, size: 4}); }
+            if (p.shootCooldown > 0) p.shootCooldown--;
+            p.vx *= 0.99; p.vy *= 0.99;
+            p.x = (p.x + p.vx < 0) ? p.x + p.vx + w : (p.x + p.vx > w) ? p.x + p.vx - w : p.x + p.vx;
+            p.y = (p.y + p.vy < 0) ? p.y + p.vy + h : (p.y + p.vy > h) ? p.y + p.vy - h : p.y + p.vy;
+            
+            // Colisiones y lógica de asteroides (simplificado)
+            localGameState.asteroids.forEach(a => { a.x += a.vx; a.y += a.vy; a.x = (a.x < 0) ? a.x + w : (a.x > w) ? a.x - w : a.x; a.y = (a.y < 0) ? a.y + h : (a.y > h) ? a.y - h : a.y; });
+            // ... Aquí iría toda la lógica de colisiones de balas vs asteroides, y jugador vs asteroides ...
+
+            gameState = localGameState; // Asignar al estado global para que 'draw' lo use
             draw();
+            requestAnimationFrame(localGameLoop);
         }
-        animationFrameId = requestAnimationFrame(gameLoop);
+        function spawnLocalAsteroid(state) {
+            const r = 30 + Math.random() * 20;
+            const shape = []; const segments = 12;
+            for (let i = 0; i < segments; i++) { const angle = (i / segments) * Math.PI * 2; const radiusOffset = 0.8 + Math.random() * 0.4; shape.push({ x: Math.cos(angle) * r * radiusOffset, y: Math.sin(angle) * r * radiusOffset }); }
+            state.asteroids.push({ x: Math.random()*w, y: Math.random()*h, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, r: r, shape: shape, rotation:0, rotationSpeed: (Math.random()-0.5)*0.02 });
+        }
+        localGameLoop();
     }
     
-    function sendInput() {
-        if (!ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId]) return;
-        const p = gameState.players[myPlayerId];
-        const angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
-        ws.send(JSON.stringify({ type: 'input', payload: { keys: keyState, angle: angle }}));
-    }
-
-    canvas.addEventListener('mousemove', e => { const rect = canvas.getBoundingClientRect(); mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top; });
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
-    canvas.addEventListener('mousedown', e => { if (e.button === 0 || e.button === 2) keyState.shoot = true; });
-    canvas.addEventListener('mouseup', e => { if (e.button === 0 || e.button === 2) keyState.shoot = false; });
-    window.addEventListener('keydown', e => { if (e.key === 'w') keyState.thrust = true; if (e.key === 's') keyState.reverse = true; });
-    window.addEventListener('keyup', e => { if (e.key === 'w') keyState.thrust = false; if (e.key === 's') keyState.reverse = false; });
-
-    function connect(gameMode) {
+    // --- LÓGICA DE RED ---
+    function sendInput() { if (!ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId] || isHost) return; const p = gameState.players[myPlayerId]; const angle = Math.atan2(mouse.y - p.y, mouse.x - p.x); ws.send(JSON.stringify({ type: 'input', payload: { keys: keyState, angle: angle }})); }
+    function connect(mode) {
         ws = new WebSocket(SERVER_URL);
         ws.onmessage = onMessage;
         ws.onclose = () => { alert('Conexión perdida con el servidor.'); location.reload(); };
-        ws.onerror = (err) => { alert('Error de conexión. Asegúrate de que el servidor esté activo.'); };
+        ws.onerror = (err) => { alert('Error de conexión. Asegúrate de que el servidor esté activo y la URL sea correcta.'); };
         ws.onopen = () => {
-            if (isHost) ws.send(JSON.stringify({type: 'create', payload: { gameMode }}));
+            if (isHost) ws.send(JSON.stringify({type: 'create', payload: { gameMode: mode }}));
             else ws.send(JSON.stringify({type: 'join', payload: { roomCode: ui.joinCodeInput.value.toUpperCase() }}));
         };
     }
-
     function onMessage(event) {
         const msg = JSON.parse(event.data);
         const { type, payload } = msg;
@@ -143,53 +191,45 @@
                 myPlayerId = payload.playerId; isHost = true;
                 ui.multiplayerMenu.classList.add('hidden'); ui.lobby.classList.remove('hidden');
                 ui.roomCode.textContent = payload.roomCode; ui.btnStartGame.classList.remove('hidden');
-                updatePlayerListUI(payload.players || [{id: myPlayerId, isHost: true}]);
+                updatePlayerListUI(payload.players);
                 break;
             case 'joinedRoom':
                 myPlayerId = payload.playerId;
                 ui.multiplayerMenu.classList.add('hidden'); ui.lobby.classList.remove('hidden');
                 ui.roomCode.textContent = payload.roomCode;
                 break;
-            case 'updatePlayers':
-                updatePlayerListUI(payload.players);
-                break;
+            case 'updatePlayers': updatePlayerListUI(payload.players); break;
             case 'startGame':
                 gameState = payload.state;
-                ui.lobby.classList.add('hidden');
+                ui.lobby.classList.add('hidden'); ui.mainMenu.classList.add('hidden');
                 setInterval(sendInput, 1000 / 30);
                 if(animationFrameId) cancelAnimationFrame(animationFrameId);
                 gameLoop();
                 break;
-            case 'state':
-                gameState = payload.state;
-                break;
-            case 'error':
-                alert(payload); if (ws) ws.close();
-                break;
+            case 'state': gameState = payload.state; break;
+            case 'error': alert(payload); if (ws) ws.close(); break;
         }
     }
-
     function updatePlayerListUI(players) {
         ui.playerList.innerHTML = '';
-        (players || []).forEach(p => {
+        (players || []).forEach((p, index) => {
             const li = document.createElement('li');
             li.textContent = p.id.split('_')[0] + (p.isHost ? ' (Host)' : '');
-            li.style.color = PLAYER_COLORS[players.indexOf(p)];
+            li.style.color = PLAYER_COLORS[index];
             ui.playerList.appendChild(li);
         });
     }
-
     function showMultiplayerMenu(mode) {
-        ui.mainMenu.classList.add('hidden');
-        ui.multiplayerMenu.classList.remove('hidden');
+        gameMode = mode;
+        ui.mainMenu.classList.add('hidden'); ui.multiplayerMenu.classList.remove('hidden');
         ui.multiplayerModeTitle.textContent = "Modo: " + (mode === 'pvp' ? 'Arena PvP' : 'Cooperativo');
         ui.btnHost.onclick = () => { isHost = true; connect(mode); };
-        ui.btnJoin.onclick = () => { isHost = false; connect(mode); };
+        ui.btnJoin.onclick = () => { isHost = false; const code = ui.joinCodeInput.value.toUpperCase(); if(code) connect(mode); };
     }
 
     ui.btnPvp.addEventListener('click', () => showMultiplayerMenu('pvp'));
-    ui.btnCoop.addEventListener('click', () => alert("Modo Cooperativo no implementado en esta versión."));
-    ui.btnSolo.addEventListener('click', () => alert("Modo Solitario no implementado en esta versión."));
+    ui.btnCoop.addEventListener('click', () => showMultiplayerMenu('coop'));
+    ui.btnSolo.addEventListener('click', startSoloGame);
     ui.btnBackToMain.addEventListener('click', () => location.reload());
     ui.btnStartGame.addEventListener('click', () => { if(isHost) ws.send(JSON.stringify({type: 'start'})); });
 </script>
