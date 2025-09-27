@@ -3,12 +3,22 @@
 <head>
     <meta charset="utf-8" />
     <title>Asteroids Online Final</title>
-    <style> body { /* ... Mismo CSS ... */ } </style>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; margin: 0; display: flex; height: 100vh; background: #000; color: #fff; cursor: crosshair; }
+        #ui { width: 320px; padding: 12px; background: #111; border-right: 2px solid #333; box-sizing: border-box; display: flex; flex-direction: column; }
+        canvas { flex: 1; background: #000; display: block; }
+        button { width: 100%; margin: 6px 0; padding: 10px 12px; border: 2px solid #fff; background: transparent; color: #fff; font-weight: bold; cursor: pointer; font-family: inherit; text-transform: uppercase; }
+        button:hover { background: #fff; color: #000; }
+        button:disabled { border-color: #555; color: #555; cursor: not-allowed; }
+        .hidden { display: none !important; } .small { font-size: 13px; color: #aaa; } hr { border-color: #444; }
+        #leaderboard { position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.4); padding: 10px; border-radius: 5px; border: 1px solid #555; color: #fff; text-align: left; font-size: 14px; min-width: 150px; }
+        input[type="text"] { width: 100%; background: #222; color: #ddd; border: 1px solid #555; padding: 10px; box-sizing: border-box; text-align: center; font-family: inherit; text-transform: uppercase; }
+        #player-list { list-style: none; padding: 0; }
+    </style>
 </head>
 <body>
     <div id="ui">
-        <h2>ASTEROIDS ONLINE</h2>
-        <hr />
+        <h2>ASTEROIDS</h2><hr />
         <div id="main-menu">
             <button id="btn-solo">Jugar en Solitario</button>
             <button id="btn-coop">Multijugador Cooperativo</button>
@@ -16,11 +26,9 @@
         </div>
         <div id="multiplayer-menu" class="hidden">
              <h3 id="multiplayer-mode-title"></h3>
-             <button id="btnHost">Crear Partida</button>
-             <hr>
+             <button id="btnHost">Crear Partida</button><hr>
              <input type="text" id="join-code-input" placeholder="CÓDIGO DE SALA" maxlength="5">
-             <button id="btnJoin">Unirse a Partida</button>
-             <hr>
+             <button id="btnJoin">Unirse a Partida</button><hr>
              <button id="btn-back-to-main" class="danger">← Volver</button>
         </div>
         <div id="lobby" class="hidden">
@@ -29,7 +37,9 @@
             <ul id="player-list"></ul>
             <button id="btn-start-game" class="hidden">Empezar Partida (Solo Host)</button>
         </div>
-        </div>
+        <div style="flex: 1;"></div><hr>
+        <div class="small">Controles: Ratón apunta, W/S mueve, Clic Dispara</div>
+    </div>
     <canvas id="gameCanvas"></canvas>
     <div id="leaderboard" class="hidden"></div>
 
@@ -37,10 +47,151 @@
     // --- IMPORTANTE ---
     // Pega aquí la URL de tu servidor de Render, cambiando "https" por "wss"
     const SERVER_URL = "wss://servidor-asteroids-pvp.onrender.com"; // CAMBIA ESTO
+
+    const ui = {
+        mainMenu: document.getElementById('main-menu'), multiplayerMenu: document.getElementById('multiplayer-menu'),
+        lobby: document.getElementById('lobby'), btnSolo: document.getElementById('btn-solo'),
+        btnCoop: document.getElementById('btn-coop'), btnPvp: document.getElementById('btn-pvp'),
+        btnBackToMain: document.getElementById('btn-back-to-main'), btnHost: document.getElementById('btnHost'),
+        btnJoin: document.getElementById('btnJoin'), joinCodeInput: document.getElementById('join-code-input'),
+        roomCode: document.getElementById('room-code'), playerList: document.getElementById('player-list'),
+        btnStartGame: document.getElementById('btn-start-game'), leaderboard: document.getElementById('leaderboard'),
+        multiplayerModeTitle: document.getElementById('multiplayer-mode-title'),
+    };
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let w = canvas.width = 1200, h = canvas.height = 800; // Tamaño fijo para consistencia
+
+    let ws, myPlayerId, isHost = false, animationFrameId;
+    let gameState = {};
+    let keyState = { thrust: false, reverse: false, shoot: false };
+    let mouse = { x: 0, y: 0 };
+
+    function draw() {
+        ctx.clearRect(0, 0, w, h);
+        if (!gameState.players) return;
+        (gameState.orbs || []).forEach(orb => {
+            const orbData = {rainbow:0, green:'#0f0', red:'#f00', blue:'#08f', yellow:'#ff0', purple:'#f0f', orange:'#f80'};
+            if (orb.type === 'rainbow') { const grad = ctx.createRadialGradient(orb.x, orb.y, 1, orb.x, orb.y, orb.r); grad.addColorStop(0, 'red'); grad.addColorStop(0.2, 'yellow'); grad.addColorStop(0.4, 'green'); grad.addColorStop(0.6, 'blue'); grad.addColorStop(0.8, 'purple'); grad.addColorStop(1, 'red'); ctx.fillStyle = grad;
+            } else ctx.fillStyle = orbData[orb.type];
+            ctx.beginPath(); ctx.arc(orb.x, orb.y, orb.r, 0, Math.PI * 2); ctx.fill();
+        });
+        for (const id in gameState.players) {
+            const p = gameState.players[id];
+            if (p.invincible > 0 && Math.floor(p.invincible / 10) % 2 === 0) continue;
+            ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.angle);
+            ctx.strokeStyle = p.color; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(p.size, 0); ctx.lineTo(-p.size / 2, -p.size / 2); ctx.lineTo(-p.size / 2, p.size / 2); ctx.closePath(); ctx.stroke();
+            ctx.restore();
+            if(p.powerUp.duration > 0) {
+                ctx.beginPath(); const pu = p.powerUp;
+                if(pu.type === 'blue' || pu.type === 'purple') { ctx.strokeStyle = pu.type === 'blue' ? 'rgba(0,180,255,0.5)' : 'rgba(255,0,255,0.5)'; ctx.lineWidth = 4; ctx.arc(p.x, p.y, p.size + 10, 0, Math.PI * 2); ctx.stroke(); }
+                else if (pu.type === 'red') { ctx.fillStyle = 'rgba(255,0,0,0.2)'; ctx.arc(p.x, p.y, 100, 0, Math.PI * 2); ctx.fill(); }
+                else if (pu.type === 'orange') { ctx.strokeStyle = '#08f'; ctx.lineWidth = 4; ctx.arc(p.x, p.y, p.size + 8, p.angle - Math.PI/2.2, p.angle + Math.PI/2.2); ctx.stroke(); }
+            }
+        }
+        (gameState.bullets || []).forEach(b => { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, b.size/2, 0, Math.PI*2); ctx.fill(); });
+        if (gameState.gameMode === 'pvp' && gameState.inProgress) {
+            ui.leaderboard.classList.remove('hidden');
+            const sortedPlayers = Object.values(gameState.players).sort((a,b) => b.kills - a.kills);
+            const time = new Date(gameState.matchTime / 30 * 1000).toISOString().substr(14, 5);
+            let leaderboardHTML = `<strong>${time}</strong><hr>`;
+            sortedPlayers.forEach(p => { leaderboardHTML += `<div style="color:${p.color};">${p.id.split('_')[0]}: ${p.kills} kills</div>`; });
+            ui.leaderboard.innerHTML = leaderboardHTML;
+        } else { ui.leaderboard.classList.add('hidden'); }
+        if (gameState.gameOver && gameState.gameMode === 'pvp') { ctx.font = '40px "Courier New"'; ctx.fillStyle = '#f55'; ctx.textAlign = 'center'; ctx.fillText("FIN DE LA PARTIDA", w / 2, h / 2); }
+    }
+
+    function gameLoop() {
+        // El cliente solo dibuja, el servidor actualiza el estado
+        if (gameState && gameState.inProgress) {
+            draw();
+        }
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
     
-    // El resto del script del cliente aquí...
-    // Es el mismo script del cliente que te di en la última respuesta,
-    // que se conecta vía WebSocket y solo se encarga de dibujar y enviar inputs.
+    function sendInput() {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId]) return;
+        const p = gameState.players[myPlayerId];
+        const angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+        ws.send(JSON.stringify({ type: 'input', payload: { keys: keyState, angle: angle }}));
+    }
+
+    canvas.addEventListener('mousemove', e => { const rect = canvas.getBoundingClientRect(); mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top; });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('mousedown', e => { if (e.button === 0 || e.button === 2) keyState.shoot = true; });
+    canvas.addEventListener('mouseup', e => { if (e.button === 0 || e.button === 2) keyState.shoot = false; });
+    window.addEventListener('keydown', e => { if (e.key === 'w') keyState.thrust = true; if (e.key === 's') keyState.reverse = true; });
+    window.addEventListener('keyup', e => { if (e.key === 'w') keyState.thrust = false; if (e.key === 's') keyState.reverse = false; });
+
+    function connect(gameMode) {
+        ws = new WebSocket(SERVER_URL);
+        ws.onmessage = onMessage;
+        ws.onclose = () => { alert('Conexión perdida con el servidor.'); location.reload(); };
+        ws.onerror = (err) => { alert('Error de conexión. Asegúrate de que el servidor esté activo.'); };
+        ws.onopen = () => {
+            if (isHost) ws.send(JSON.stringify({type: 'create', payload: { gameMode }}));
+            else ws.send(JSON.stringify({type: 'join', payload: { roomCode: ui.joinCodeInput.value.toUpperCase() }}));
+        };
+    }
+
+    function onMessage(event) {
+        const msg = JSON.parse(event.data);
+        const { type, payload } = msg;
+        switch (type) {
+            case 'roomCreated':
+                myPlayerId = payload.playerId; isHost = true;
+                ui.multiplayerMenu.classList.add('hidden'); ui.lobby.classList.remove('hidden');
+                ui.roomCode.textContent = payload.roomCode; ui.btnStartGame.classList.remove('hidden');
+                updatePlayerListUI(payload.players || [{id: myPlayerId, isHost: true}]);
+                break;
+            case 'joinedRoom':
+                myPlayerId = payload.playerId;
+                ui.multiplayerMenu.classList.add('hidden'); ui.lobby.classList.remove('hidden');
+                ui.roomCode.textContent = payload.roomCode;
+                break;
+            case 'updatePlayers':
+                updatePlayerListUI(payload.players);
+                break;
+            case 'startGame':
+                gameState = payload.state;
+                ui.lobby.classList.add('hidden');
+                setInterval(sendInput, 1000 / 30);
+                if(animationFrameId) cancelAnimationFrame(animationFrameId);
+                gameLoop();
+                break;
+            case 'state':
+                gameState = payload.state;
+                break;
+            case 'error':
+                alert(payload); if (ws) ws.close();
+                break;
+        }
+    }
+
+    function updatePlayerListUI(players) {
+        ui.playerList.innerHTML = '';
+        (players || []).forEach(p => {
+            const li = document.createElement('li');
+            li.textContent = p.id.split('_')[0] + (p.isHost ? ' (Host)' : '');
+            li.style.color = PLAYER_COLORS[players.indexOf(p)];
+            ui.playerList.appendChild(li);
+        });
+    }
+
+    function showMultiplayerMenu(mode) {
+        ui.mainMenu.classList.add('hidden');
+        ui.multiplayerMenu.classList.remove('hidden');
+        ui.multiplayerModeTitle.textContent = "Modo: " + (mode === 'pvp' ? 'Arena PvP' : 'Cooperativo');
+        ui.btnHost.onclick = () => { isHost = true; connect(mode); };
+        ui.btnJoin.onclick = () => { isHost = false; connect(mode); };
+    }
+
+    ui.btnPvp.addEventListener('click', () => showMultiplayerMenu('pvp'));
+    ui.btnCoop.addEventListener('click', () => alert("Modo Cooperativo no implementado en esta versión."));
+    ui.btnSolo.addEventListener('click', () => alert("Modo Solitario no implementado en esta versión."));
+    ui.btnBackToMain.addEventListener('click', () => location.reload());
+    ui.btnStartGame.addEventListener('click', () => { if(isHost) ws.send(JSON.stringify({type: 'start'})); });
 </script>
 </body>
 </html>
