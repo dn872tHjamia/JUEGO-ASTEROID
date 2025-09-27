@@ -87,6 +87,7 @@
             } else ctx.fillStyle = ORB_DATA[orb.type];
             ctx.beginPath(); ctx.arc(orb.x, orb.y, orb.r, 0, Math.PI * 2); ctx.fill();
         });
+
         for (const id in gameState.players) {
             const p = gameState.players[id];
             if (p.invincible > 0 && Math.floor(p.invincible / 10) % 2 === 0) continue;
@@ -101,6 +102,7 @@
                 else if (pu.type === 'orange') { ctx.strokeStyle = '#08f'; ctx.lineWidth = 4; ctx.arc(p.x, p.y, p.size + 8, p.angle - Math.PI/2.2, p.angle + Math.PI/2.2); ctx.stroke(); }
             }
         }
+
         (gameState.bullets || []).forEach(b => { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, b.size/2, 0, Math.PI*2); ctx.fill(); });
         (gameState.asteroids || []).forEach(a => { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.rotation); ctx.beginPath(); ctx.moveTo(a.shape[0].x, a.shape[0].y); for (let i = 1; i < a.shape.length; i++) ctx.lineTo(a.shape[i].x, a.shape[i].y); ctx.closePath(); ctx.stroke(); ctx.restore(); });
         
@@ -122,58 +124,20 @@
         }
         if (gameState.gameOver) { ctx.font = '40px "Courier New"'; ctx.fillStyle = '#f55'; ctx.textAlign = 'center'; ctx.fillText("FIN DE LA PARTIDA", w / 2, h / 2); }
     }
-
-    // --- MODO OFFLINE / SOLITARIO ---
-    function startSoloGame() {
-        gameMode = 'solo'; myPlayerId = 'solo_player';
-        gameState = { players: {}, bullets: [], asteroids: [], gameMode: 'solo', score: 0, lives: 3, inProgress: true, gameOver: false, level: 1 };
-        gameState.players[myPlayerId] = { id: myPlayerId, x: w/2, y: h/2, vx:0,vy:0, angle:0, keys: keyState, shootCooldown:0, invincible:180, color: '#0f0', size: SHIP_SIZE, powerUp:{} };
-        for(let i=0; i < 5; i++) spawnLocalAsteroid(gameState);
-        ui.mainMenu.classList.add('hidden');
-        if (animationFrameId) cancelAnimationFrame(animationFrameId);
-        
-        function localGameLoop() {
-            if(gameState.gameOver) { draw(); return; }
-            // Run a local version of the update logic
-            const p = gameState.players[myPlayerId];
-            p.angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
-            if (p.keys.thrust) { p.vx += Math.cos(p.angle) * 0.15; p.vy += Math.sin(p.angle) * 0.15; }
-            if (p.keys.reverse) { p.vx -= Math.cos(p.angle) * 0.08; p.vy -= Math.sin(p.angle) * 0.08; }
-            if (p.keys.shoot && p.shootCooldown <= 0) { p.shootCooldown = 15; gameState.bullets.push({ x: p.x + Math.cos(p.angle) * p.size, y: p.y + Math.sin(p.angle) * p.size, vx: p.vx + Math.cos(p.angle) * 8, vy: p.vy + Math.sin(p.angle) * 8, life: 60, owner: myPlayerId, size: 4}); }
-            if (p.shootCooldown > 0) p.shootCooldown--;
-            p.vx *= FRICTION; p.vy *= FRICTION;
-            const wrap = (v,m) => v<0?v+m:v>m?v-m:v;
-            p.x = wrap(p.x + p.vx, w); p.y = wrap(p.y + p.vy, h);
-            
-            // Asteroid logic
-            if (gameState.asteroids.length === 0) { gameState.level++; for(let i=0; i<3+gameState.level; i++) spawnLocalAsteroid(gameState); }
-            gameState.asteroids.forEach(a => { a.x += a.vx; a.y += a.vy; a.rotation += a.rotationSpeed; a.x = wrap(a.x, w); a.y = wrap(a.y, h); });
-            
-            for (let i = gameState.bullets.length - 1; i >= 0; i--) { /* ... (colisiones balas vs asteroides) ... */ }
-            if (p.invincible > 0) p.invincible--;
-            else for (const a of gameState.asteroids) { /* ... (colisiones jugador vs asteroides) ... */ }
-            gameState.bullets = gameState.bullets.filter(b => --b.life > 0);
-            
-            draw();
-            animationFrameId = requestAnimationFrame(localGameLoop);
-        }
-        function spawnLocalAsteroid(state) {
-            const r = 30 + Math.random() * 20;
-            const shape = []; const segments = 12;
-            for (let i = 0; i < segments; i++) { const angle = (i/segments)*Math.PI*2; const rOffset = 0.8+Math.random()*0.4; shape.push({x: Math.cos(angle)*r*rOffset, y: Math.sin(angle)*r*rOffset}); }
-            state.asteroids.push({ x: Math.random()>0.5?0:w, y: Math.random()>0.5?0:h, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, r:r, shape:shape, rotation:0, rotationSpeed:(Math.random()-0.5)*0.02, level:0 });
-        }
-        localGameLoop();
-    }
     
     // --- LÓGICA DE RED ---
     function sendInput() {
-        if (!ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId]) return;
-        if (isHost && gameMode === 'solo') return; // Don't send input in solo
+        if (gameMode === 'solo' || !ws || ws.readyState !== WebSocket.OPEN || !myPlayerId || !gameState.players || !gameState.players[myPlayerId]) return;
         const p = gameState.players[myPlayerId];
         const angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
         ws.send(JSON.stringify({ type: 'input', payload: { keys: keyState, angle: angle }}));
     }
+
+    function clientGameLoop() {
+        draw();
+        animationFrameId = requestAnimationFrame(clientGameLoop);
+    }
+    
     function connect(mode) {
         ws = new WebSocket(SERVER_URL);
         ws.onmessage = onMessage;
@@ -184,6 +148,7 @@
             else ws.send(JSON.stringify({type: 'join', payload: { roomCode: ui.joinCodeInput.value.toUpperCase() }}));
         };
     }
+
     function onMessage(event) {
         const msg = JSON.parse(event.data);
         const { type, payload } = msg;
@@ -195,7 +160,7 @@
                 updatePlayerListUI(payload.players);
                 break;
             case 'joinedRoom':
-                myPlayerId = payload.playerId;
+                myPlayerId = payload.playerId; isHost = false;
                 ui.multiplayerMenu.classList.add('hidden'); ui.lobby.classList.remove('hidden');
                 ui.roomCode.textContent = payload.roomCode;
                 break;
@@ -211,6 +176,7 @@
             case 'error': alert(payload); if (ws) ws.close(); location.reload(); break;
         }
     }
+
     function updatePlayerListUI(players) {
         ui.playerList.innerHTML = '';
         (players || []).forEach((p, index) => {
@@ -220,6 +186,7 @@
             ui.playerList.appendChild(li);
         });
     }
+
     function showMultiplayerMenu(mode) {
         gameMode = mode;
         ui.mainMenu.classList.add('hidden'); ui.multiplayerMenu.classList.remove('hidden');
@@ -227,8 +194,83 @@
         ui.btnHost.onclick = () => { isHost = true; connect(mode); };
         ui.btnJoin.onclick = () => { isHost = false; const code = ui.joinCodeInput.value.toUpperCase(); if(code) connect(mode); };
     }
+    
+    // --- LÓGICA MODO SOLITARIO (OFFLINE) ---
+    function startSoloGame() {
+        gameMode = 'solo'; myPlayerId = 'player';
+        gameState = createInitialGameState('coop'); // Usa la base de coop
+        gameState.inProgress = true;
+        gameState.players[myPlayerId] = { id: myPlayerId, x: w/2, y: h/2, vx:0,vy:0, angle:0, keys: keyState, shootCooldown:0, invincible:180, color: '#0f0', size: SHIP_SIZE, powerUp:{} };
+        for(let i=0; i<5; i++) spawnLocalAsteroid(gameState);
+        ui.mainMenu.classList.add('hidden');
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        
+        function soloGameLoop() {
+            if(gameState.gameOver) { draw(); return; }
+            // Copia local de la lógica del servidor
+            const p = gameState.players[myPlayerId];
+            p.angle = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+            if (p.keys.thrust) { p.vx += Math.cos(p.angle) * 0.15; p.vy += Math.sin(p.angle) * 0.15; }
+            if (p.keys.reverse) { p.vx -= Math.cos(p.angle) * 0.08; p.vy -= Math.sin(p.angle) * 0.08; }
+            if (p.keys.shoot && p.shootCooldown <= 0) { p.shootCooldown = 15; gameState.bullets.push({ x: p.x + Math.cos(p.angle) * p.size, y: p.y + Math.sin(p.angle) * p.size, vx: p.vx + Math.cos(p.angle) * 8, vy: p.vy + Math.sin(p.angle) * 8, life: 60, owner: myPlayerId, size: 4}); }
+            if (p.shootCooldown > 0) p.shootCooldown--;
+            p.vx *= FRICTION; p.vy *= FRICTION;
+            p.x = wrap(p.x + p.vx, w); p.y = wrap(p.y + p.vy, h);
+            handleLocalCoopLogic(gameState);
+            gameState.bullets = gameState.bullets.filter(b => --b.life > 0);
+            draw();
+            animationFrameId = requestAnimationFrame(soloGameLoop);
+        }
+        soloGameLoop();
+    }
+
+    function handleLocalCoopLogic(gameState) {
+        if (gameState.asteroids.length === 0) {
+            gameState.level++;
+            for(let i=0; i<3+gameState.level; i++) spawnLocalAsteroid(gameState);
+        }
+        const wrap = (val, max) => (val < 0) ? val + max : (val > max) ? val - max : val;
+        gameState.asteroids.forEach(a => { a.x += a.vx; a.y += a.vy; a.rotation += a.rotationSpeed; a.x = wrap(a.x, w); a.y = wrap(a.y, h); });
+        for (let i = gameState.bullets.length - 1; i >= 0; i--) {
+            const b = gameState.bullets[i]; let bulletRemoved = false;
+            for (let j = gameState.asteroids.length - 1; j >= 0; j--) {
+                const a = gameState.asteroids[j];
+                if (Math.hypot(b.x - a.x, b.y - a.y) < a.r) {
+                    gameState.bullets.splice(i, 1); bulletRemoved = true; gameState.score += a.level === 0 ? 20 : 50;
+                    if (a.level < 2) { spawnLocalAsteroid(gameState, a.x, a.y, a.r/2); spawnLocalAsteroid(gameState, a.x, a.y, a.r/2); }
+                    gameState.asteroids.splice(j, 1); break;
+                }
+            }
+            if(bulletRemoved) continue;
+        }
+        const p = gameState.players[myPlayerId];
+        if (p.invincible > 0) p.invincible--;
+        else for (const a of gameState.asteroids) {
+            if (Math.hypot(p.x - a.x, p.y - a.y) < a.r + p.size / 2) {
+                p.x = w/2; p.y = h/2; p.vx = 0; p.vy = 0; p.invincible = 180;
+                gameState.lives--;
+                if (gameState.lives <= 0) gameState.gameOver = true;
+                break;
+            }
+        }
+    }
+
+    function spawnLocalAsteroid(state, x, y, radius) {
+        const level = radius ? (radius < 25 ? 2 : 1) : 0;
+        const r = radius || 30 + Math.random() * 20;
+        const shape = []; const segments = 12;
+        for (let i = 0; i < segments; i++) { const angle = (i/segments)*Math.PI*2; const rOffset = 0.8+Math.random()*0.4; shape.push({x: Math.cos(angle)*r*rOffset, y: Math.sin(angle)*r*rOffset}); }
+        state.asteroids.push({ x: x || (Math.random()>0.5?0:w), y: y || (Math.random()>0.5?0:h), vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, r:r, shape:shape, rotation:0, rotationSpeed:(Math.random()-0.5)*0.02, level:level });
+    }
 
     // --- Event Listeners Menú Principal ---
+    canvas.addEventListener('mousemove', e => { const rect = canvas.getBoundingClientRect(); mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top; });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('mousedown', e => { if (e.button === 0 || e.button === 2) keyState.shoot = true; });
+    canvas.addEventListener('mouseup', e => { if (e.button === 0 || e.button === 2) keyState.shoot = false; });
+    window.addEventListener('keydown', e => { if (e.key === 'w') keyState.thrust = true; if (e.key === 's') keyState.reverse = true; });
+    window.addEventListener('keyup', e => { if (e.key === 'w') keyState.thrust = false; if (e.key === 's') keyState.reverse = false; });
+    
     ui.btnPvp.addEventListener('click', () => showMultiplayerMenu('pvp'));
     ui.btnCoop.addEventListener('click', () => showMultiplayerMenu('coop'));
     ui.btnSolo.addEventListener('click', startSoloGame);
