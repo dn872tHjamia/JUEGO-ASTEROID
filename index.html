@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <title>Asteroids Online Final</title>
+    <style> body { /* ... Mismo CSS ... */ } </style>
+</head>
+<body>
+    <div id="ui">
+        <h2>ASTEROIDS ONLINE</h2>
+        <hr />
+        <div id="main-menu">
+            <button id="btn-solo">Jugar en Solitario</button>
+            <button id="btn-coop">Multijugador Cooperativo</button>
+            <button id="btn-pvp" style="border-color: #f80; color: #f80;">Arena PvP (2-4 Jugadores)</button>
+        </div>
+        <div id="multiplayer-menu" class="hidden">
+             <h3 id="multiplayer-mode-title"></h3>
+             <button id="btnHost">Crear Partida</button>
+             <hr>
+             <input type="text" id="join-code-input" placeholder="CÓDIGO DE SALA" maxlength="5">
+             <button id="btnJoin">Unirse a Partida</button>
+             <hr>
+             <button id="btn-back-to-main" class="danger">← Volver</button>
+        </div>
+        <div id="lobby" class="hidden">
+            <h3>SALA: <span id="room-code" style="color:#0f0;"></span></h3>
+            <p>Jugadores Conectados:</p>
+            <ul id="player-list"></ul>
+            <button id="btn-start-game" class="hidden">Empezar Partida (Solo Host)</button>
+        </div>
+        </div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="leaderboard" class="hidden"></div>
+
+<script>
+    // --- IMPORTANTE ---
+    // Pega aquí la URL de tu servidor de Render, cambiando "https" por "wss"
+    const SERVER_URL = "wss://servidor-asteroids-pvp.onrender.com"; // CAMBIA ESTO
+    
+    // El resto del script del cliente aquí...
+    // Es el mismo script del cliente que te di en la última respuesta,
+    // que se conecta vía WebSocket y solo se encarga de dibujar y enviar inputs.
+</script>
+</body>
+</html>
